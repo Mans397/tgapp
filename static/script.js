@@ -1,17 +1,28 @@
+// static/script.js
+
 document.addEventListener("DOMContentLoaded", () => {
-    // 1. Получаем/генерируем user_id (храним в localStorage)
-    let userId = localStorage.getItem("user_id");
-    if (!userId) {
-        userId = Math.floor(1000 + Math.random() * 9000); // 4-значное
-        localStorage.setItem("user_id", userId);
-    }
+    const tg = window.Telegram?.WebApp;
+    let userId = null;
 
-    const userInfo = document.getElementById("user-info");
-    userInfo.textContent = `Your user_id: ${userId}`;
-
+    const userInfoElem = document.getElementById("user-info");
     const itemsDiv = document.getElementById("items");
 
-    // 2. Загружаем товары
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        // Открыто внутри Telegram WebApp
+        userId = tg.initDataUnsafe.user.id;
+        console.log("Определён user_id из Telegram WebApp:", userId);
+        userInfoElem.textContent = `Your Telegram user_id: ${userId}`;
+    } else {
+        // Не в Телеграме
+        userInfoElem.textContent = "Пожалуйста, откройте мини-приложение через команду /webshop в боте.";
+        itemsDiv.innerHTML = "<p>Товары не загружаются вне Telegram WebApp.</p>";
+        return;
+    }
+
+    // Если хотим развернуть на весь экран
+    tg.expand();
+
+    // Функция загрузки товаров
     async function loadItems() {
         itemsDiv.innerHTML = "<p>Загружаем товары...</p>";
         try {
@@ -26,7 +37,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 3. Рендер товаров
     function renderItems(items) {
         if (items.length === 0) {
             itemsDiv.innerHTML = "<p>Нет товаров</p>";
@@ -46,12 +56,10 @@ document.addEventListener("DOMContentLoaded", () => {
         <p class="card-stock">Осталось: ${item.stock}</p>
         <button class="buy-btn" data-id="${item.id}">Купить</button>
       `;
-
             itemsDiv.appendChild(card);
         });
     }
 
-    // 4. При клике «Купить»
     itemsDiv.addEventListener("click", async (e) => {
         if (e.target.classList.contains("buy-btn")) {
             const itemId = parseInt(e.target.dataset.id, 10);
@@ -60,18 +68,22 @@ document.addEventListener("DOMContentLoaded", () => {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        user_id: parseInt(userId),
+                        user_id: userId,
                         item_id: itemId
                     })
                 });
                 const result = await resp.json();
                 if (result.success) {
                     // Покажем код
-                    alert(`${result.message}\n\nВаш код: ${result.purchase_code}\n\nСсылка: ${window.location.origin}/ticket/${result.purchase_code}`);
+                    alert(
+                        `${result.message}\n\n` +
+                        `Код покупки: ${result.purchase_code}\n` +
+                        `Ссылка: ${window.location.origin}/ticket/${result.purchase_code}`
+                    );
                 } else {
                     alert(`Ошибка: ${result.message}`);
                 }
-                // Перезагружаем товары
+                // Перезагрузим товары
                 loadItems();
             } catch (error) {
                 alert("Сетевая ошибка: " + error.message);
@@ -79,6 +91,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // 5. При загрузке страницы сразу тянем товары
+    // При первом рендере сразу грузим товары
     loadItems();
 });

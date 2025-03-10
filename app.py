@@ -56,7 +56,8 @@ def init_db():
                     user_id BIGINT,
                     merch_id INTEGER,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    purchase_code TEXT
+                    purchase_code TEXT,
+                    purchase_url TEXT
                 )
             """)
             # Уникальный индекс на purchase_code
@@ -161,11 +162,12 @@ def buy_item():
 
             # 5. purchase_code
             code = generate_code(8)
+            url = f"https://tgapp-fml5.onrender.com/ticket/{code}"
             cur.execute("""
-                INSERT INTO purchases (user_id, merch_id, purchase_code)
-                VALUES (%s, %s, %s)
+                INSERT INTO purchases (user_id, merch_id, purchase_code, purchase_url)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id, timestamp
-            """, (user_id, merch_id, code))
+            """, (user_id, merch_id, code, url))
             purchase_row = cur.fetchone()
             purchase_id = purchase_row[0]
             purchase_time = purchase_row[1]

@@ -2,6 +2,7 @@
 
 document.addEventListener("DOMContentLoaded", () => {
     const tg = window.Telegram?.WebApp;
+    console.log("tg =", tg);
     let userId = null;
 
     const userInfoElem = document.getElementById("user-info");

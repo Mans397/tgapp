@@ -1,66 +1,72 @@
-// static/script.js
+function getQueryParams() {
+    // Простейшая функция парсинга URL: ?uid=123&other=...
+    const params = {};
+    const query = window.location.search;
+    if (query.startsWith("?")) {
+        const pairs = query.substring(1).split("&");
+        for (const pair of pairs) {
+            const [key, val] = pair.split("=");
+            params[decodeURIComponent(key)] = decodeURIComponent(val);
+        }
+    }
+    return params;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-    const tg = window.Telegram?.WebApp;
-    console.log("tg =", tg);
-    let userId = null;
-
     const userInfoElem = document.getElementById("user-info");
     const itemsDiv = document.getElementById("items");
 
-    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
-        // Открыто внутри Telegram WebApp
-        userId = tg.initDataUnsafe.user.id;
-        console.log("Определён user_id из Telegram WebApp:", userId);
-        userInfoElem.textContent = `Your Telegram user_id: ${userId}`;
-    } else {
-        // Не в Телеграме
-        userInfoElem.textContent = "Пожалуйста, откройте мини-приложение через команду /webshop в боте.";
-        itemsDiv.innerHTML = "<p>Товары не загружаются вне Telegram WebApp.</p>";
+    // 1. Определяем user_id из ?uid=
+    const queryParams = getQueryParams();
+    const userId = queryParams.uid;
+
+    if (!userId) {
+        userInfoElem.textContent = "Не задан ?uid=..., откройте ссылку из бота!";
+        itemsDiv.innerHTML = "<p>Невозможно загрузить товары без user_id</p>";
         return;
     }
 
-    // Если хотим развернуть на весь экран
-    tg.expand();
+    userInfoElem.textContent = `Ваш user_id: ${userId}`;
 
-    // Функция загрузки товаров
+    // 2. Загружаем товары
     async function loadItems() {
-        itemsDiv.innerHTML = "<p>Загружаем товары...</p>";
+        itemsDiv.innerHTML = "Загружаем товары...";
         try {
             const resp = await fetch("/api/items");
             const items = await resp.json();
             if (!Array.isArray(items)) {
-                throw new Error("Неправильный формат /api/items");
+                throw new Error("Неверный формат /api/items");
             }
             renderItems(items);
         } catch (err) {
-            itemsDiv.innerHTML = `<p>Ошибка при загрузке: ${err.message}</p>`;
+            itemsDiv.innerHTML = `Ошибка: ${err.message}`;
         }
     }
 
+    // 3. Отрисуем товары
     function renderItems(items) {
         if (items.length === 0) {
-            itemsDiv.innerHTML = "<p>Нет товаров</p>";
+            itemsDiv.innerHTML = "Нет товаров";
             return;
         }
-        itemsDiv.innerHTML = ""; // очистим
+        itemsDiv.innerHTML = "";
 
         items.forEach(item => {
-            const card = document.createElement("div");
-            card.className = "card";
-
-            card.innerHTML = `
+            const div = document.createElement("div");
+            div.className = "card";
+            div.innerHTML = `
         <img src="${item.image_url}" alt="${item.name}" class="card-image" 
-             onerror="this.src='https://via.placeholder.com/200?text=No+Image';"/>
+             onerror="this.src='https://via.placeholder.com/200?text=No+Image'"/>
         <h2 class="card-title">${item.name}</h2>
         <p class="card-cost">Цена: ${item.cost} баллов</p>
         <p class="card-stock">Осталось: ${item.stock}</p>
         <button class="buy-btn" data-id="${item.id}">Купить</button>
       `;
-            itemsDiv.appendChild(card);
+            itemsDiv.appendChild(div);
         });
     }
 
+    // 4. Обработчик «Купить»
     itemsDiv.addEventListener("click", async (e) => {
         if (e.target.classList.contains("buy-btn")) {
             const itemId = parseInt(e.target.dataset.id, 10);
@@ -68,30 +74,26 @@ document.addEventListener("DOMContentLoaded", () => {
                 const resp = await fetch("/api/buy", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        item_id: itemId
-                    })
+                    body: JSON.stringify({ user_id: userId, item_id: itemId })
                 });
                 const result = await resp.json();
                 if (result.success) {
-                    // Покажем код
                     alert(
-                        `${result.message}\n\n` +
+                        `${result.message}\n` +
                         `Код покупки: ${result.purchase_code}\n` +
                         `Ссылка: ${window.location.origin}/ticket/${result.purchase_code}`
                     );
                 } else {
                     alert(`Ошибка: ${result.message}`);
                 }
-                // Перезагрузим товары
+                // Перезагрузить товары
                 loadItems();
             } catch (error) {
-                alert("Сетевая ошибка: " + error.message);
+                alert("Ошибка запроса: " + error.message);
             }
         }
     });
 
-    // При первом рендере сразу грузим товары
+    // 5. При загрузке страницы сразу загрузим список товаров
     loadItems();
 });

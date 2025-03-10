@@ -18,13 +18,15 @@ DB_CONFIG = {
 }
 
 def get_connection():
-    """Возвращает новое подключение к PostgreSQL."""
+    """Создаёт подключение к PostgreSQL."""
     return psycopg2.connect(**DB_CONFIG)
 
 def init_db():
     """
-    Создаем (при необходимости) таблицы и поля.
-    Добавляем поле purchase_code в purchases, если его нет.
+    Создаёт (при необходимости) таблицы:
+      - users (user_id BIGINT, points)
+      - merch (товары)
+      - purchases (покупки) + purchase_code
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -32,11 +34,10 @@ def init_db():
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
-                    points INTEGER DEFAULT 0,
-                    first_name TEXT,
-                    last_name TEXT
+                    points INTEGER DEFAULT 0
                 )
             """)
+
             # Таблица merch
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS merch (
@@ -47,6 +48,7 @@ def init_db():
                     image_url TEXT DEFAULT ''
                 )
             """)
+
             # Таблица purchases
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS purchases (
@@ -57,41 +59,39 @@ def init_db():
                     purchase_code TEXT
                 )
             """)
-            # Уникальный индекс на purchase_code (если нужно)
+            # Уникальный индекс на purchase_code
             cur.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_code 
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_purchases_code
                 ON purchases(purchase_code)
             """)
         conn.commit()
 
 def generate_code(length=8):
-    """Генерирует случайный код из заглавных букв и цифр."""
+    """Генерируем случайный код из A-Z0-9."""
+    import string, random
     chars = string.ascii_uppercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
-# Инициализируем БД при старте
+# Инициализируем базу при старте
 init_db()
 
 @app.route("/")
 def index():
-    """
-    Отдаём статический index.html, лежащий в ./static (главная страница).
-    """
+    """Отдаём статический index.html из ./static."""
     return send_from_directory("static", "index.html")
 
 @app.route("/<path:path>")
 def static_files(path):
-    """
-    Любые другие файлы из ./static (CSS, JS, картинки, etc.).
-    """
+    """Раздаём статические файлы (CSS, JS, etc.) из ./static."""
     return send_from_directory("static", path)
 
 @app.route("/api/items", methods=["GET"])
 def get_items():
     """
-    Возвращает список товаров (мерча):
+    Возвращает список товаров (мерча) в JSON:
     [
-      {id, name, cost, stock, image_url}, ...
+      { "id": ..., "name": "...", "cost": ..., "stock": ..., "image_url": "..." },
+      ...
     ]
     """
     items = []
@@ -111,20 +111,23 @@ def get_items():
 @app.route("/api/buy", methods=["POST"])
 def buy_item():
     """
-    Принимает JSON: { "user_id": 123, "item_id": 1 }
-    Проверяет баллы, уменьшает stock, записывает в purchases + генерирует purchase_code.
-    Возвращает JSON с результатом и purchase_code.
+    Принимает JSON: { "user_id": 123, "item_id": 1 }.
+    1) Проверяет товар (stock, cost)
+    2) Проверяет баллы пользователя
+    3) Списывает баллы, уменьшает stock
+    4) Записывает purchase с уникальным purchase_code
+    5) Возвращает JSON: { success, message, purchase_code }
     """
     data = request.get_json()
     user_id = data.get("user_id")
     item_id = data.get("item_id")
 
     if not user_id or not item_id:
-        return jsonify({"success": False, "message": "Invalid parameters"}), 400
+        return jsonify({"success": False, "message": "user_id / item_id отсутствуют"}), 400
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # 1. Ищем товар
+            # 1. Товар
             cur.execute("SELECT id, name, cost, stock FROM merch WHERE id=%s", (item_id,))
             row = cur.fetchone()
             if not row:
@@ -134,10 +137,10 @@ def buy_item():
             if stock <= 0:
                 return jsonify({"success": False, "message": "Товар закончился"}), 400
 
-            # 2. Проверяем баллы пользователя (по умолчанию 0)
+            # 2. Проверяем баллы
             cur.execute("SELECT points FROM users WHERE user_id=%s", (user_id,))
-            user_row = cur.fetchone()
-            points = user_row[0] if user_row else 0
+            row_user = cur.fetchone()
+            points = row_user[0] if row_user else 0
 
             if points < cost:
                 return jsonify({
@@ -145,64 +148,57 @@ def buy_item():
                     "message": f"Недостаточно баллов (у вас {points}, нужно {cost})."
                 }), 400
 
-            # 3. Списываем баллы:
+            # 3. Списываем баллы
             new_points = points - cost
-            # Если пользователя нет - вставим, иначе обновим
             cur.execute("""
                 INSERT INTO users (user_id, points) VALUES (%s, %s)
                 ON CONFLICT (user_id) DO UPDATE SET points = EXCLUDED.points
             """, (user_id, new_points))
 
-            # 4. Уменьшим stock на 1
+            # 4. stock--
             new_stock = stock - 1
             cur.execute("UPDATE merch SET stock=%s WHERE id=%s", (new_stock, merch_id))
 
-            # 5. Генерируем purchase_code (8 символов, уникальный)
-            purchase_code = generate_code(8)
-            # Вставляем запись в purchases
+            # 5. purchase_code
+            code = generate_code(8)
             cur.execute("""
                 INSERT INTO purchases (user_id, merch_id, purchase_code)
                 VALUES (%s, %s, %s)
                 RETURNING id, timestamp
-            """, (user_id, merch_id, purchase_code))
+            """, (user_id, merch_id, code))
             purchase_row = cur.fetchone()
             purchase_id = purchase_row[0]
-            timestamp = purchase_row[1]
+            purchase_time = purchase_row[1]
 
         conn.commit()
 
     return jsonify({
         "success": True,
-        "message": f"Вы успешно купили «{name}» за {cost} баллов!",
+        "message": f"Товар «{name}» куплен за {cost} баллов!",
+        "purchase_code": code,
         "new_stock": new_stock,
-        "new_points": new_points,
-        "purchase_code": purchase_code
+        "new_points": new_points
     })
 
 @app.route("/ticket/<purchase_code>")
 def view_ticket(purchase_code):
     """
-    Страница, где можно увидеть детали покупки по коду.
-    Можно показать руководству, чтобы они проверили реальность покупки.
+    Страница-подтверждение для кода purchase_code.
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT p.id, p.timestamp, p.user_id,
-                       m.name as merch_name, m.cost,
-                       u.first_name, u.last_name
+                       m.name as merch_name, m.cost
                 FROM purchases p
                 LEFT JOIN merch m ON p.merch_id = m.id
-                LEFT JOIN users u ON p.user_id = u.user_id
-                WHERE p.purchase_code = %s
+                WHERE p.purchase_code=%s
             """, (purchase_code,))
             row = cur.fetchone()
             if not row:
-                return f"<h1>Код «{purchase_code}» не найден.</h1>", 404
+                return f"<h1>Код {purchase_code} не найден.</h1>", 404
 
-            (p_id, p_timestamp, p_userid, merch_name, merch_cost, first_name, last_name) = row
-
-    full_name = ((first_name or "") + " " + (last_name or "")).strip()
+            p_id, p_timestamp, p_userid, merch_name, merch_cost = row
 
     html = f"""
     <html>
@@ -237,7 +233,7 @@ def view_ticket(purchase_code):
           <p><b>Код:</b> {purchase_code}</p>
           <p><b>Товар:</b> {merch_name} (стоимость {merch_cost} баллов)</p>
           <p><b>Дата:</b> {p_timestamp.strftime("%Y-%m-%d %H:%M:%S")}</p>
-          <p><b>Покупатель (user_id):</b> {p_userid} {'('+full_name+')' if full_name else ''}</p>
+          <p><b>Покупатель (user_id):</b> {p_userid}</p>
         </div>
       </div>
     </body>
@@ -246,5 +242,6 @@ def view_ticket(purchase_code):
     return html
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
